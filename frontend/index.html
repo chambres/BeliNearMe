@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Beli Metadata Explorer</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Beli Metadata Explorer</p>
+          <h1>Search metadata-ranked restaurants anywhere, not just by text match.</h1>
+          <p class="hero-text">
+            This UI starts with a Katy area search, but the form is fully generic. It uses Beli's
+            recommendation endpoint instead of plain text search, so cuisine filters behave like metadata
+            and not just a name match.
+          </p>
+          <p class="hero-text">
+            Results are ordered by the restaurant's <strong>average Beli score</strong>. The
+            <strong>Rec Score</strong> is shown separately as a recommendation signal, because those are different metrics.
+          </p>
+        </div>
+        <div class="hero-panel">
+          <div class="stat">
+            <span class="stat-label">Default center</span>
+            <span class="stat-value">Katy, TX</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Default filter</span>
+            <span class="stat-value">None</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Default sort</span>
+            <span class="stat-value">Beli Avg</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="control-card">
+          <form id="query-form" class="query-form">
+            <input id="latitude" name="latitude" type="hidden" value="29.7858" />
+            <input id="longitude" name="longitude" type="hidden" value="-95.8245" />
+
+            <div class="map-card">
+              <div class="map-card-copy">
+                <p class="map-eyebrow">Pin Picker</p>
+                <p class="map-help">Click the map, drag the pin, or scroll to zoom.</p>
+              </div>
+              <div id="map-picker" class="map-picker" aria-label="Map picker"></div>
+            </div>
+
+            <div class="form-grid">
+              <label class="wide radius-control">
+                <div class="radius-header">
+                  <span>Radius</span>
+                  <output id="radius-value" class="radius-value" for="radius">10 mi</output>
+                </div>
+                <input id="radius" name="radius" type="range" min="1" max="100" step="1" value="10" />
+                <div class="radius-scale">
+                  <span>1 mi</span>
+                  <span>100 mi</span>
+                </div>
+              </label>
+              <label>
+                <span>City filter</span>
+                <input id="city" name="city" type="text" value="" placeholder="Optional, e.g. Katy, TX" />
+              </label>
+              <label>
+                <span>Sort method</span>
+                <select id="sort" name="sort">
+                  <option value="Score" selected>Score</option>
+                  <option value="Distance">Distance</option>
+                  <option value="Most Trending">Most Trending</option>
+                  <option value="Recency">Recency</option>
+                  <option value="Date added">Date added</option>
+                  <option value="Number of friends">Number of friends</option>
+                </select>
+              </label>
+              <div class="wide price-picker">
+                <div class="cuisine-header">
+                  <span>Price</span>
+                  <p class="cuisine-help">Filter by one or more Beli price levels.</p>
+                </div>
+                <div id="price-options" class="price-options" aria-label="Price options"></div>
+              </div>
+              <div class="wide cuisine-picker">
+                <div class="cuisine-header">
+                  <span>Cuisines</span>
+                  <p class="cuisine-help">Select as many as you want, or add your own.</p>
+                </div>
+                <div id="selected-cuisines" class="selected-cuisines" aria-live="polite"></div>
+                <div id="cuisine-options" class="cuisine-options" aria-label="Cuisine options"></div>
+                <div class="custom-cuisine-row">
+                  <input id="custom-cuisine" name="customCuisine" type="text" placeholder="Add a custom cuisine" />
+                  <button type="button" id="add-cuisine-button" class="secondary-button">Add cuisine</button>
+                </div>
+              </div>
+              <div class="wide exclude-zone-shell">
+                <div class="cuisine-header">
+                  <span>NOT Cuisines</span>
+                  <p class="cuisine-help">Drag cuisine chips here to exclude them from the results.</p>
+                </div>
+                <div id="excluded-cuisines-dropzone" class="excluded-cuisines-dropzone" aria-label="Excluded cuisines drop zone">
+                  <div id="excluded-cuisines" class="excluded-cuisines" aria-live="polite"></div>
+                </div>
+              </div>
+              <label class="checkbox-row">
+                <input id="open-now" name="openNow" type="checkbox" />
+                <span>Open now only</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="exact-radius" name="exactRadius" type="checkbox" checked />
+                <span>Exact radius only</span>
+              </label>
+            </div>
+
+            <div class="action-row">
+              <button type="submit" id="submit-button">Search</button>
+              <button type="button" id="katy-halal-button" class="secondary-button">Reset defaults</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="results-shell">
+          <div class="results-header">
+            <div>
+              <p class="eyebrow">Results</p>
+              <h2 id="results-title">Waiting for query</h2>
+            </div>
+            <div class="summary-bar">
+              <div class="summary-chip">
+                <span class="summary-label">Visible</span>
+                <span id="visible-count" class="summary-value">0</span>
+              </div>
+              <div class="summary-chip">
+                <span class="summary-label">Returned</span>
+                <span id="returned-count" class="summary-value">0</span>
+              </div>
+              <div class="summary-chip">
+                <span class="summary-label">Exact radius</span>
+                <span id="radius-count" class="summary-value">0</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="status-banner" class="status-banner">Use the defaults and press Search.</div>
+          <div id="results-grid" class="results-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <template id="restaurant-card-template">
+      <article class="restaurant-card">
+        <div class="card-top">
+          <div>
+            <p class="card-kicker">Restaurant</p>
+            <h3 class="restaurant-name"></h3>
+          </div>
+          <a class="beli-link" target="_blank" rel="noreferrer">Open in Beli</a>
+        </div>
+
+        <div class="rating-strip">
+          <div class="rating-box rating-box-beli-average">
+            <span class="rating-label">Beli Avg</span>
+            <span class="rating-value average-beli-rating"></span>
+          </div>
+          <div class="rating-box rating-box-nearby-rank">
+            <span class="rating-label">Rec Score</span>
+            <span class="rating-value recommendation-rating"></span>
+          </div>
+          <div class="rating-box rating-box-google">
+            <span class="rating-label">Google</span>
+            <span class="rating-value google-rating"></span>
+          </div>
+          <div class="rating-box rating-box-distance">
+            <span class="rating-label">Distance</span>
+            <span class="rating-value distance"></span>
+          </div>
+        </div>
+
+        <dl class="details-grid">
+          <div>
+            <dt>Address</dt>
+            <dd class="address"></dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd class="status"></dd>
+          </div>
+          <div>
+            <dt>Price</dt>
+            <dd class="price"></dd>
+          </div>
+          <div class="details-wide">
+            <dt>Cuisines</dt>
+            <dd class="cuisines"></dd>
+          </div>
+          <div class="details-wide">
+            <dt>Score note</dt>
+            <dd class="score-note"></dd>
+          </div>
+        </dl>
+      </article>
+    </template>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
