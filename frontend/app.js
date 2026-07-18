@@ -1,56 +1,55 @@
+"use strict";
+
+// ---------- Element handles ----------
 const form = document.getElementById("query-form");
-const resultsGrid = document.getElementById("results-grid");
-const statusBanner = document.getElementById("status-banner");
-const resultsTitle = document.getElementById("results-title");
-const visibleCount = document.getElementById("visible-count");
-const returnedCount = document.getElementById("returned-count");
-const radiusCount = document.getElementById("radius-count");
-const submitButton = document.getElementById("submit-button");
-const resetButton = document.getElementById("katy-halal-button");
-const template = document.getElementById("restaurant-card-template");
 const latitudeInput = document.getElementById("latitude");
 const longitudeInput = document.getElementById("longitude");
 const cityInput = document.getElementById("city");
 const radiusInput = document.getElementById("radius");
 const radiusValue = document.getElementById("radius-value");
-const selectedCuisinesContainer = document.getElementById("selected-cuisines");
-const excludedCuisinesContainer = document.getElementById("excluded-cuisines");
-const excludedCuisinesDropzone = document.getElementById("excluded-cuisines-dropzone");
-const cuisineOptionsContainer = document.getElementById("cuisine-options");
-const priceOptionsContainer = document.getElementById("price-options");
+const sortSelect = document.getElementById("sort");
+const openNowInput = document.getElementById("open-now");
+const exactRadiusInput = document.getElementById("exact-radius");
+const coordReadout = document.getElementById("coord-readout");
+
+const priceOptions = document.getElementById("price-options");
+const cuisineOptions = document.getElementById("cuisine-options");
+const selectedCuisinesBox = document.getElementById("selected-cuisines");
+const excludedCuisinesBox = document.getElementById("excluded-cuisines");
+const excludedDropzone = document.getElementById("excluded-cuisines-dropzone");
 const customCuisineInput = document.getElementById("custom-cuisine");
 const addCuisineButton = document.getElementById("add-cuisine-button");
 
+const submitButton = document.getElementById("submit-button");
+const resetButton = document.getElementById("reset-button");
+
+const statusBanner = document.getElementById("status-banner");
+const resultsNote = document.getElementById("results-note");
+const resultsList = document.getElementById("results-list");
+const rowTemplate = document.getElementById("result-row-template");
+
+const statShowing = document.getElementById("stat-showing");
+const statRadius = document.getElementById("stat-radius");
+const statReturned = document.getElementById("stat-returned");
+
+// ---------- State ----------
 let map;
-let marker;
+let centerMarker;
 let radiusCircle;
+let resultLayer;
+const rowRefs = []; // { row, marker } per rendered result
+let activeIndex = -1;
+
 let selectedCuisines = [];
 let excludedCuisines = [];
 let selectedPriceLevels = [];
 
 const cuisineChoices = [
-  "Halal",
-  "Pakistani",
-  "Indian",
-  "Middle Eastern",
-  "Mediterranean",
-  "Mexican",
-  "Italian",
-  "Chinese",
-  "Japanese",
-  "Sushi",
-  "Thai",
-  "Vietnamese",
-  "Korean",
-  "Seafood",
-  "Barbecue",
-  "Steakhouse",
-  "Vegan",
-  "Vegetarian",
-  "Gluten Free",
-  "Kosher",
+  "Halal", "Pakistani", "Indian", "Middle Eastern", "Mediterranean",
+  "Mexican", "Italian", "Chinese", "Japanese", "Sushi", "Thai",
+  "Vietnamese", "Korean", "Seafood", "Barbecue", "Steakhouse",
+  "Vegan", "Vegetarian", "Gluten Free", "Kosher",
 ];
-
 const priceChoices = [1, 2, 3, 4];
 
 const defaults = {
@@ -66,49 +65,74 @@ const defaults = {
   exactRadius: true,
 };
 
-resetButton.addEventListener("click", () => {
-  latitudeInput.value = defaults.latitude;
-  longitudeInput.value = defaults.longitude;
-  radiusInput.value = defaults.radius;
-  cityInput.value = defaults.city;
-  document.getElementById("sort").value = defaults.sort;
-  document.getElementById("open-now").checked = defaults.openNow;
-  document.getElementById("exact-radius").checked = defaults.exactRadius;
+// ---------- Formatting helpers ----------
+function formatScore(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
+  return Number(value).toFixed(1);
+}
 
-  selectedCuisines = [...defaults.cuisines];
-  excludedCuisines = [...defaults.excludedCuisines];
-  selectedPriceLevels = [...defaults.priceLevels];
+function formatDistance(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
+  return `${Number(value).toFixed(1)} mi`;
+}
 
-  renderCuisinePicker();
-  renderExcludedCuisines();
-  renderPricePicker();
-  customCuisineInput.value = "";
+function formatPrice(business) {
+  if (!business) return null;
+  const price = Number(business.price);
+  if (!Number.isNaN(price) && price > 0) return "$".repeat(price);
+  if (typeof business.price_key === "string" && business.price_key.trim()) return business.price_key.trim();
+  return null;
+}
 
-  syncMapToInputs({ recenter: true });
-  syncRadiusCircle();
-  updateRadiusValue();
-});
+function isOperational(status) {
+  return typeof status === "string" && status.toUpperCase() === "OPERATIONAL";
+}
 
-addCuisineButton.addEventListener("click", () => {
-  addCustomCuisine();
-});
+function scoreTier(score) {
+  const value = Number(score);
+  if (Number.isNaN(value)) return "";
+  if (value >= 9) return "tier-a";
+  if (value >= 8) return "tier-b";
+  return "";
+}
 
-customCuisineInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") {
-    return;
-  }
+// ---------- Request ----------
+function buildPayload() {
+  const city = cityInput.value.trim();
+  return {
+    location: {
+      latitude: Number(latitudeInput.value),
+      longitude: Number(longitudeInput.value),
+    },
+    radius_miles: Number(radiusInput.value),
+    sort_method: sortSelect.value,
+    city: city || null,
+    cuisines: [...selectedCuisines],
+    excluded_cuisines: [...excludedCuisines],
+    price_levels: [...selectedPriceLevels],
+    open_now: openNowInput.checked,
+    exact_radius_only: exactRadiusInput.checked,
+    include_filter_options: false,
+  };
+}
 
-  event.preventDefault();
-  addCustomCuisine();
-});
+function searchLabel() {
+  const city = cityInput.value.trim();
+  if (city) return city;
+  const lat = Number(latitudeInput.value);
+  const lng = Number(longitudeInput.value);
+  if (!Number.isNaN(lat) && !Number.isNaN(lng)) return `${lat.toFixed(3)}, ${lng.toFixed(3)}`;
+  return "the selected area";
+}
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const payload = buildPayload();
-  const label = getSearchLabel();
+  const label = searchLabel();
 
-  setLoadingState(true);
-  setStatus(`Searching metadata-ranked restaurants near ${label}...`);
+  setLoading(true);
+  setStatus(`Searching near ${label}…`);
+  showSkeletons();
 
   try {
     const response = await fetch("/v1/recommendations/nearby", {
@@ -116,461 +140,550 @@ form.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
     const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.detail || "Request failed.");
-    }
-
+    if (!response.ok) throw new Error(data.detail || "Request failed.");
     renderResults(data, label);
   } catch (error) {
-    resultsGrid.replaceChildren();
-    resultsTitle.textContent = "Request failed";
-    visibleCount.textContent = "0";
-    returnedCount.textContent = "0";
-    radiusCount.textContent = "0";
-    setStatus(error.message || "Unknown error.");
+    renderError(error.message || "Unknown error.");
   } finally {
-    setLoadingState(false);
+    setLoading(false);
   }
 });
 
-function buildPayload() {
-  const city = cityInput.value.trim();
-
-  return {
-    location: {
-      latitude: Number(latitudeInput.value),
-      longitude: Number(longitudeInput.value),
-    },
-    radius_miles: Number(radiusInput.value),
-    sort_method: document.getElementById("sort").value,
-    city: city || null,
-    cuisines: [...selectedCuisines],
-    excluded_cuisines: [...excludedCuisines],
-    price_levels: [...selectedPriceLevels],
-    open_now: document.getElementById("open-now").checked,
-    exact_radius_only: document.getElementById("exact-radius").checked,
-    include_filter_options: false,
-  };
-}
-
-function getSearchLabel() {
-  const city = cityInput.value.trim();
-  if (city) {
-    return city;
-  }
-
-  const latitude = Number(latitudeInput.value);
-  const longitude = Number(longitudeInput.value);
-  if (!Number.isNaN(latitude) && !Number.isNaN(longitude)) {
-    return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
-  }
-
-  return "selected area";
-}
-
+// ---------- Rendering ----------
 function renderResults(data, label) {
-  resultsGrid.replaceChildren();
   const results = Array.isArray(data.results) ? data.results : [];
 
-  resultsTitle.textContent = `${label} results`;
-  visibleCount.textContent = String(results.length);
-  returnedCount.textContent = String(data.returned_count ?? 0);
-  radiusCount.textContent = String(data.exact_radius_count ?? 0);
+  statShowing.textContent = String(results.length);
+  statRadius.textContent = String(data.exact_radius_count ?? 0);
+  statReturned.textContent = String(data.returned_count ?? 0);
+
+  clearResultMarkers();
+  resultsList.replaceChildren();
+  rowRefs.length = 0;
+  activeIndex = -1;
+
+  const sortName = sortSelect.options[sortSelect.selectedIndex].text;
+  resultsNote.textContent = results.length ? `sorted by ${sortName}` : "";
 
   if (!results.length) {
-    setStatus("No restaurants matched the current metadata, price, and radius filters.");
+    setStatus("No restaurants matched these filters — widen the radius or clear a cuisine.");
+    const empty = document.createElement("li");
+    empty.className = "list-placeholder";
+    empty.textContent = "No matches.";
+    resultsList.appendChild(empty);
     return;
   }
 
-  setStatus(
-    `Showing ${results.length} restaurants ordered by average Beli score, with rec score and Google rating where available.`,
-  );
+  setStatus(`${results.length} restaurants near ${label}. Click a row to locate it on the map.`);
 
-  for (const result of results) {
-    const fragment = template.content.cloneNode(true);
-    fragment.querySelector(".restaurant-name").textContent = result.business?.name ?? "Unknown";
+  const bounds = [];
+  const centerLat = Number(latitudeInput.value);
+  const centerLng = Number(longitudeInput.value);
+  if (!Number.isNaN(centerLat) && !Number.isNaN(centerLng)) bounds.push([centerLat, centerLng]);
 
-    const link = fragment.querySelector(".beli-link");
-    const quickLink = result.business?.quick_link;
-    if (quickLink) {
-      link.href = quickLink;
+  results.forEach((result, index) => {
+    const rank = index + 1;
+    const business = result.business || {};
+    const avg = result.average_beli_score;
+    const rec = result.recommendation_score ?? result.score;
+    const tier = scoreTier(avg);
+
+    // ---- list row ----
+    const fragment = rowTemplate.content.cloneNode(true);
+    const row = fragment.querySelector(".row");
+    if (tier) row.classList.add(tier);
+    row.querySelector(".row-rank").textContent = rank;
+    row.querySelector(".row-name").textContent = business.name || "Unknown";
+
+    const headline = row.querySelector(".row-headline");
+    const link = row.querySelector(".row-link");
+
+    // phone / website icon links (from the raw Beli business payload)
+    const rawBusiness = (result.raw && result.raw.business) || {};
+    const phone = typeof rawBusiness.phone_number === "string" ? rawBusiness.phone_number.trim() : "";
+    const website = typeof rawBusiness.website === "string" ? rawBusiness.website.trim() : "";
+    if (phone) headline.insertBefore(iconLink(`tel:${phone}`, "phone", phone), link);
+    if (/^https?:\/\//i.test(website)) headline.insertBefore(iconLink(website, "web", website), link);
+
+    if (business.quick_link) {
+      link.href = business.quick_link;
     } else {
       link.removeAttribute("href");
-      link.textContent = "No Beli link";
-      link.classList.add("muted-link");
+      link.textContent = "no link";
+      link.classList.add("is-disabled");
+    }
+    link.addEventListener("click", (event) => event.stopPropagation());
+
+    const scoreEl = row.querySelector(".row-score-value");
+    const avgText = formatScore(avg);
+    if (avgText) {
+      scoreEl.textContent = avgText;
+    } else {
+      scoreEl.textContent = "–";
+      scoreEl.classList.add("dim");
     }
 
-    fragment.querySelector(".average-beli-rating").textContent = formatRating(result.average_beli_score);
-    fragment.querySelector(".recommendation-rating").textContent = formatRating(result.recommendation_score ?? result.score);
-    fragment.querySelector(".google-rating").textContent = formatRating(result.google_rating);
-    fragment.querySelector(".distance").textContent = formatDistance(result.distance_mi);
-    fragment.querySelector(".address").textContent = result.business?.address || "Unavailable";
-    fragment.querySelector(".status").textContent = formatStatus(result.business?.status);
-    fragment.querySelector(".price").textContent = formatPrice(result.business);
-    fragment.querySelector(".cuisines").textContent = (result.business?.cuisines || []).join(", ") || "Unavailable";
-    fragment.querySelector(".score-note").textContent =
-      "Beli Avg comes from the business-page average score field. Rec Score is the recommendation value from Beli's nearby recommendations API.";
+    row.querySelector(".row-meta").append(...buildMeta(result, business, rec));
 
-    resultsGrid.appendChild(fragment);
+    // ---- map marker ----
+    let marker = null;
+    const lat = Number(business.lat);
+    const lng = Number(business.lng);
+    if (!Number.isNaN(lat) && !Number.isNaN(lng) && lat !== 0 && lng !== 0) {
+      marker = L.marker([lat, lng], { icon: numberedIcon(rank, tier) });
+      marker.bindPopup(popupHtml(business, avgText, result.distance_mi));
+      marker.on("click", () => focusResult(index, { fromMap: true }));
+      resultLayer.addLayer(marker);
+      bounds.push([lat, lng]);
+    }
+
+    row.addEventListener("click", () => focusResult(index, { fromMap: false }));
+    rowRefs.push({ row, marker });
+    resultsList.appendChild(fragment);
+  });
+
+  if (map && bounds.length > 1) {
+    map.fitBounds(bounds, { padding: [36, 36], maxZoom: 14 });
   }
 }
 
-function formatRating(value) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return "-";
+function buildMeta(result, business, rec) {
+  const parts = [];
+  const cuisines = Array.isArray(business.cuisines) ? business.cuisines.filter(Boolean) : [];
+  if (cuisines.length) parts.push(text(cuisines.slice(0, 3).join(", ")));
+
+  const price = formatPrice(business);
+  if (price) parts.push(tag(price));
+
+  const distance = formatDistance(result.distance_mi);
+  if (distance) parts.push(tag(distance));
+
+  const recText = formatScore(rec);
+  if (recText) parts.push(text(`rec ${recText}`));
+
+  if (result.mention_count) parts.push(text(`${result.mention_count} ratings`));
+
+  if (business.status) {
+    const open = isOperational(business.status);
+    const el = document.createElement("span");
+    el.className = open ? "row-open" : "row-closed";
+    el.textContent = open ? "Open" : "Closed";
+    parts.push(el);
   }
-  return Number(value).toFixed(1);
+
+  // Join with separators
+  const out = [];
+  parts.forEach((part, i) => {
+    if (i > 0) {
+      const sep = document.createElement("span");
+      sep.className = "sep";
+      sep.textContent = "·";
+      out.push(sep);
+    }
+    out.push(part);
+  });
+  return out;
 }
 
-function formatDistance(value) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return "-";
-  }
-  return `${Number(value).toFixed(2)} mi`;
+function text(value) {
+  const el = document.createElement("span");
+  el.textContent = value;
+  return el;
 }
 
-function formatStatus(value) {
-  if (!value) {
-    return "Unknown";
-  }
-  return value.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (match) => match.toUpperCase());
+function tag(value) {
+  const el = document.createElement("span");
+  el.className = "tag";
+  el.textContent = value;
+  return el;
 }
 
-function formatPrice(business) {
-  if (!business) {
-    return "-";
-  }
+const ICON_SVG = {
+  phone: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.94.36 1.86.7 2.73a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.35-1.27a2 2 0 0 1 2.11-.45c.87.34 1.79.57 2.73.7A2 2 0 0 1 22 16.92z"/></svg>',
+  web: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+};
 
-  const price = Number(business.price);
-  if (!Number.isNaN(price) && price > 0) {
-    return "$".repeat(price);
+function iconLink(href, kind, title) {
+  const anchor = document.createElement("a");
+  anchor.className = "row-icon";
+  anchor.href = href;
+  anchor.title = title;
+  anchor.setAttribute("aria-label", kind === "phone" ? `Call ${title}` : `Website: ${title}`);
+  if (kind !== "phone") {
+    anchor.target = "_blank";
+    anchor.rel = "noreferrer";
   }
+  anchor.innerHTML = ICON_SVG[kind];
+  anchor.addEventListener("click", (event) => event.stopPropagation());
+  return anchor;
+}
 
-  if (typeof business.price_key === "string" && business.price_key.trim()) {
-    return business.price_key.trim();
+function popupHtml(business, avgText, distance) {
+  const bits = [];
+  const cuisines = Array.isArray(business.cuisines) ? business.cuisines.filter(Boolean) : [];
+  if (avgText) bits.push(`Beli avg ${avgText}`);
+  if (cuisines.length) bits.push(cuisines[0]);
+  const dist = formatDistance(distance);
+  if (dist) bits.push(dist);
+  const name = escapeHtml(business.name || "Unknown");
+  return `<div class="popup-name">${name}</div><div class="popup-meta">${escapeHtml(bits.join("  ·  "))}</div>`;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, (ch) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]
+  ));
+}
+
+function focusResult(index, { fromMap }) {
+  const ref = rowRefs[index];
+  if (!ref) return;
+
+  if (activeIndex >= 0 && rowRefs[activeIndex]) {
+    rowRefs[activeIndex].row.classList.remove("is-active");
+    setMarkerActive(rowRefs[activeIndex].marker, false);
   }
+  activeIndex = index;
+  ref.row.classList.add("is-active");
+  setMarkerActive(ref.marker, true);
 
-  return "-";
+  if (ref.marker && map) {
+    map.panTo(ref.marker.getLatLng(), { animate: true });
+    ref.marker.openPopup();
+  }
+  if (fromMap) {
+    ref.row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function setMarkerActive(marker, active) {
+  if (!marker || !marker._icon) return;
+  marker._icon.classList.toggle("is-active", active);
+}
+
+function numberedIcon(rank, tier) {
+  return L.divIcon({
+    className: "pin",
+    html: `<span class="pin-dot ${tier}">${rank}</span>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    popupAnchor: [0, -12],
+  });
+}
+
+function clearResultMarkers() {
+  if (resultLayer) resultLayer.clearLayers();
+}
+
+function showSkeletons() {
+  resultsList.replaceChildren();
+  for (let i = 0; i < 6; i += 1) {
+    const li = document.createElement("li");
+    li.className = "skeleton";
+    resultsList.appendChild(li);
+  }
+}
+
+function renderError(message) {
+  clearResultMarkers();
+  resultsList.replaceChildren();
+  rowRefs.length = 0;
+  statShowing.textContent = "0";
+  statRadius.textContent = "0";
+  statReturned.textContent = "0";
+  resultsNote.textContent = "";
+  statusBanner.classList.add("is-error");
+  statusBanner.textContent = message;
+  const li = document.createElement("li");
+  li.className = "list-placeholder";
+  li.textContent = "Request failed.";
+  resultsList.appendChild(li);
 }
 
 function setStatus(message) {
+  statusBanner.classList.remove("is-error");
   statusBanner.textContent = message;
 }
 
-function setLoadingState(isLoading) {
+function setLoading(isLoading) {
   submitButton.disabled = isLoading;
-  submitButton.textContent = isLoading ? "Searching..." : "Search";
+  submitButton.textContent = isLoading ? "Searching…" : "Search";
 }
 
-function renderCuisinePicker() {
-  renderSelectedCuisines();
-  renderCuisineOptions();
-}
-
-function renderPricePicker() {
-  priceOptionsContainer.replaceChildren();
-
-  for (const priceLevel of priceChoices) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "price-chip";
-    if (selectedPriceLevels.includes(priceLevel)) {
-      button.classList.add("price-chip-active");
-    }
-    button.textContent = "$".repeat(priceLevel);
-    button.addEventListener("click", () => togglePriceLevel(priceLevel));
-    priceOptionsContainer.appendChild(button);
-  }
-}
-
-function renderSelectedCuisines() {
-  selectedCuisinesContainer.replaceChildren();
-
-  if (!selectedCuisines.length) {
-    const empty = document.createElement("span");
-    empty.className = "selected-cuisines-empty";
-    empty.textContent = "No cuisine filter selected.";
-    selectedCuisinesContainer.appendChild(empty);
-    return;
-  }
-
-  for (const cuisine of selectedCuisines) {
-    const chip = document.createElement("span");
-    chip.className = "selected-chip";
-    chip.draggable = true;
-    chip.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("text/plain", cuisine);
-      event.dataTransfer.effectAllowed = "move";
-    });
-
-    const label = document.createElement("span");
-    label.textContent = cuisine;
-    chip.appendChild(label);
-
-    const removeButton = document.createElement("button");
-    removeButton.type = "button";
-    removeButton.className = "selected-chip-remove";
-    removeButton.textContent = "x";
-    removeButton.setAttribute("aria-label", `Remove ${cuisine}`);
-    removeButton.addEventListener("click", () => {
-      selectedCuisines = selectedCuisines.filter((value) => value !== cuisine);
-      renderCuisinePicker();
-    });
-    chip.appendChild(removeButton);
-
-    selectedCuisinesContainer.appendChild(chip);
-  }
-}
-
-function renderExcludedCuisines() {
-  excludedCuisinesContainer.replaceChildren();
-
-  if (!excludedCuisines.length) {
-    const empty = document.createElement("span");
-    empty.className = "excluded-cuisines-empty";
-    empty.textContent = "Drag cuisine chips here to exclude them.";
-    excludedCuisinesContainer.appendChild(empty);
-    return;
-  }
-
-  for (const cuisine of excludedCuisines) {
-    const chip = document.createElement("span");
-    chip.className = "excluded-chip";
-
-    const label = document.createElement("span");
-    label.textContent = cuisine;
-    chip.appendChild(label);
-
-    const removeButton = document.createElement("button");
-    removeButton.type = "button";
-    removeButton.className = "excluded-chip-remove";
-    removeButton.textContent = "x";
-    removeButton.setAttribute("aria-label", `Remove excluded cuisine ${cuisine}`);
-    removeButton.addEventListener("click", () => {
-      excludedCuisines = excludedCuisines.filter((value) => value !== cuisine);
-      renderExcludedCuisines();
-      renderCuisinePicker();
-    });
-    chip.appendChild(removeButton);
-
-    excludedCuisinesContainer.appendChild(chip);
-  }
-}
-
+// ---------- Cuisine + price pickers ----------
 function renderCuisineOptions() {
-  cuisineOptionsContainer.replaceChildren();
-
+  cuisineOptions.replaceChildren();
   for (const cuisine of cuisineChoices) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "cuisine-chip";
-    if (selectedCuisines.includes(cuisine)) {
-      button.classList.add("cuisine-chip-active");
-    }
-    button.draggable = true;
+    button.className = "chip";
+    if (selectedCuisines.includes(cuisine)) button.classList.add("is-active");
     button.textContent = cuisine;
+    button.draggable = true;
     button.addEventListener("click", () => toggleCuisine(cuisine));
     button.addEventListener("dragstart", (event) => {
       event.dataTransfer.setData("text/plain", cuisine);
       event.dataTransfer.effectAllowed = "move";
     });
-    cuisineOptionsContainer.appendChild(button);
+    cuisineOptions.appendChild(button);
   }
 }
 
-function toggleCuisine(cuisine) {
-  excludedCuisines = excludedCuisines.filter((value) => value !== cuisine);
-  if (selectedCuisines.includes(cuisine)) {
-    selectedCuisines = selectedCuisines.filter((value) => value !== cuisine);
-  } else {
-    selectedCuisines = [...selectedCuisines, cuisine];
+function renderSelectedCuisines() {
+  selectedCuisinesBox.replaceChildren();
+  if (!selectedCuisines.length) {
+    selectedCuisinesBox.appendChild(emptyToken("No cuisine filter — showing all."));
+    return;
   }
-  renderCuisinePicker();
+  for (const cuisine of selectedCuisines) {
+    const token = document.createElement("span");
+    token.className = "token is-selected";
+    token.draggable = true;
+    token.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("text/plain", cuisine);
+      event.dataTransfer.effectAllowed = "move";
+    });
+    token.appendChild(text(cuisine));
+    token.appendChild(removeButton(`Remove ${cuisine}`, () => {
+      selectedCuisines = selectedCuisines.filter((v) => v !== cuisine);
+      renderCuisinePickers();
+    }));
+    selectedCuisinesBox.appendChild(token);
+  }
+}
+
+function renderExcludedCuisines() {
+  excludedCuisinesBox.replaceChildren();
+  if (!excludedCuisines.length) {
+    excludedCuisinesBox.appendChild(emptyToken("Drag a cuisine here to exclude it."));
+    return;
+  }
+  for (const cuisine of excludedCuisines) {
+    const token = document.createElement("span");
+    token.className = "token is-excluded";
+    token.appendChild(text(cuisine));
+    token.appendChild(removeButton(`Remove excluded ${cuisine}`, () => {
+      excludedCuisines = excludedCuisines.filter((v) => v !== cuisine);
+      renderCuisinePickers();
+    }));
+    excludedCuisinesBox.appendChild(token);
+  }
+}
+
+function renderPriceOptions() {
+  priceOptions.replaceChildren();
+  for (const level of priceChoices) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chip is-price";
+    if (selectedPriceLevels.includes(level)) button.classList.add("is-active");
+    button.textContent = "$".repeat(level);
+    button.addEventListener("click", () => togglePrice(level));
+    priceOptions.appendChild(button);
+  }
+}
+
+function renderCuisinePickers() {
+  renderCuisineOptions();
+  renderSelectedCuisines();
   renderExcludedCuisines();
 }
 
-function togglePriceLevel(priceLevel) {
-  if (selectedPriceLevels.includes(priceLevel)) {
-    selectedPriceLevels = selectedPriceLevels.filter((value) => value !== priceLevel);
+function emptyToken(message) {
+  const el = document.createElement("span");
+  el.className = "token-empty";
+  el.textContent = message;
+  return el;
+}
+
+function removeButton(label, handler) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "token-remove";
+  button.textContent = "×";
+  button.setAttribute("aria-label", label);
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function toggleCuisine(cuisine) {
+  excludedCuisines = excludedCuisines.filter((v) => v !== cuisine);
+  if (selectedCuisines.includes(cuisine)) {
+    selectedCuisines = selectedCuisines.filter((v) => v !== cuisine);
   } else {
-    selectedPriceLevels = [...selectedPriceLevels, priceLevel].sort((left, right) => left - right);
+    selectedCuisines = [...selectedCuisines, cuisine];
   }
-  renderPricePicker();
+  renderCuisinePickers();
+}
+
+function togglePrice(level) {
+  if (selectedPriceLevels.includes(level)) {
+    selectedPriceLevels = selectedPriceLevels.filter((v) => v !== level);
+  } else {
+    selectedPriceLevels = [...selectedPriceLevels, level].sort((a, b) => a - b);
+  }
+  renderPriceOptions();
 }
 
 function addCustomCuisine() {
   const value = customCuisineInput.value.trim();
-  if (!value) {
-    return;
-  }
-
-  if (!selectedCuisines.includes(value)) {
-    selectedCuisines = [...selectedCuisines, value];
-  }
-  excludedCuisines = excludedCuisines.filter((cuisine) => cuisine !== value);
-
-  if (!cuisineChoices.includes(value)) {
-    cuisineChoices.push(value);
-  }
-
+  if (!value) return;
+  if (!selectedCuisines.includes(value)) selectedCuisines = [...selectedCuisines, value];
+  excludedCuisines = excludedCuisines.filter((v) => v !== value);
+  if (!cuisineChoices.includes(value)) cuisineChoices.push(value);
   customCuisineInput.value = "";
-  renderCuisinePicker();
-  renderExcludedCuisines();
+  renderCuisinePickers();
 }
 
 function excludeCuisine(cuisine) {
-  if (!cuisine) {
-    return;
-  }
-
-  if (!excludedCuisines.includes(cuisine)) {
-    excludedCuisines = [...excludedCuisines, cuisine];
-  }
-  selectedCuisines = selectedCuisines.filter((value) => value !== cuisine);
-
-  if (!cuisineChoices.includes(cuisine)) {
-    cuisineChoices.push(cuisine);
-  }
-
-  renderCuisinePicker();
-  renderExcludedCuisines();
+  if (!cuisine) return;
+  if (!excludedCuisines.includes(cuisine)) excludedCuisines = [...excludedCuisines, cuisine];
+  selectedCuisines = selectedCuisines.filter((v) => v !== cuisine);
+  if (!cuisineChoices.includes(cuisine)) cuisineChoices.push(cuisine);
+  renderCuisinePickers();
 }
 
-function initializeExcludedCuisineDropzone() {
-  excludedCuisinesDropzone.addEventListener("dragover", (event) => {
+addCuisineButton.addEventListener("click", addCustomCuisine);
+customCuisineInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
     event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    excludedCuisinesDropzone.classList.add("excluded-cuisines-dropzone-active");
-  });
+    addCustomCuisine();
+  }
+});
 
-  excludedCuisinesDropzone.addEventListener("dragleave", () => {
-    excludedCuisinesDropzone.classList.remove("excluded-cuisines-dropzone-active");
-  });
+excludedDropzone.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  excludedDropzone.classList.add("is-over");
+});
+excludedDropzone.addEventListener("dragleave", () => excludedDropzone.classList.remove("is-over"));
+excludedDropzone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  excludedDropzone.classList.remove("is-over");
+  excludeCuisine(event.dataTransfer.getData("text/plain").trim());
+});
 
-  excludedCuisinesDropzone.addEventListener("drop", (event) => {
-    event.preventDefault();
-    excludedCuisinesDropzone.classList.remove("excluded-cuisines-dropzone-active");
-    const cuisine = event.dataTransfer.getData("text/plain").trim();
-    excludeCuisine(cuisine);
-  });
-}
+// ---------- Reset ----------
+resetButton.addEventListener("click", () => {
+  latitudeInput.value = defaults.latitude;
+  longitudeInput.value = defaults.longitude;
+  radiusInput.value = defaults.radius;
+  cityInput.value = defaults.city;
+  sortSelect.value = defaults.sort;
+  openNowInput.checked = defaults.openNow;
+  exactRadiusInput.checked = defaults.exactRadius;
 
-function initializeMap() {
+  selectedCuisines = [...defaults.cuisines];
+  excludedCuisines = [...defaults.excludedCuisines];
+  selectedPriceLevels = [...defaults.priceLevels];
+  customCuisineInput.value = "";
+
+  renderCuisinePickers();
+  renderPriceOptions();
+  updateRadiusLabel();
+  updateCoordReadout();
+  syncCenter({ recenter: true });
+});
+
+// ---------- Map ----------
+function initMap() {
   if (typeof L === "undefined") {
-    setStatus("Map picker failed to load. Search still works, but the map controls are unavailable.");
+    setStatus("Map failed to load — search still works.");
     return;
   }
 
-  const startLat = Number(latitudeInput.value);
-  const startLng = Number(longitudeInput.value);
+  const lat = Number(latitudeInput.value);
+  const lng = Number(longitudeInput.value);
 
-  map = L.map("map-picker", {
-    zoomControl: true,
-    scrollWheelZoom: true,
-  }).setView([startLat, startLng], 11);
-
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  map = L.map("map-picker", { zoomControl: true, scrollWheelZoom: true }).setView([lat, lng], 11);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    maxZoom: 20,
+    subdomains: "abcd",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
   }).addTo(map);
 
-  marker = L.marker([startLat, startLng], {
-    draggable: true,
-  }).addTo(map);
-
-  radiusCircle = L.circle([startLat, startLng], {
+  radiusCircle = L.circle([lat, lng], {
     radius: milesToMeters(Number(radiusInput.value)),
-    color: "#0e6662",
-    weight: 2,
-    opacity: 0.85,
-    fillColor: "#0e6662",
-    fillOpacity: 0.12,
+    color: "#2fbfad",
+    weight: 1.5,
+    opacity: 0.9,
+    fillColor: "#2fbfad",
+    fillOpacity: 0.08,
   }).addTo(map);
 
-  marker.on("dragend", () => {
-    const position = marker.getLatLng();
-    setCoordinates(position.lat, position.lng, { recenter: false });
-  });
+  centerMarker = L.marker([lat, lng], { draggable: true, zIndexOffset: 1000 }).addTo(map);
+  centerMarker.bindTooltip("Search center — drag to move", { direction: "top" });
 
-  map.on("click", (event) => {
-    setCoordinates(event.latlng.lat, event.latlng.lng, { recenter: false });
-  });
+  resultLayer = L.layerGroup().addTo(map);
 
-  latitudeInput.addEventListener("change", () => syncMapToInputs({ recenter: true }));
-  longitudeInput.addEventListener("change", () => syncMapToInputs({ recenter: true }));
+  centerMarker.on("dragend", () => {
+    const pos = centerMarker.getLatLng();
+    setCenter(pos.lat, pos.lng, { recenter: false });
+  });
+  map.on("click", (event) => setCenter(event.latlng.lat, event.latlng.lng, { recenter: false }));
+
   radiusInput.addEventListener("input", () => {
     syncRadiusCircle();
-    updateRadiusValue();
+    updateRadiusLabel();
   });
 }
 
-function setCoordinates(latitude, longitude, options = {}) {
-  const { recenter = true } = options;
-  latitudeInput.value = Number(latitude).toFixed(6);
-  longitudeInput.value = Number(longitude).toFixed(6);
-
-  if (!map || !marker) {
-    return;
-  }
-
-  marker.setLatLng([latitude, longitude]);
-  if (radiusCircle) {
-    radiusCircle.setLatLng([latitude, longitude]);
-  }
-  if (recenter) {
-    map.panTo([latitude, longitude], { animate: true });
-  }
+function setCenter(lat, lng, { recenter = true } = {}) {
+  latitudeInput.value = Number(lat).toFixed(6);
+  longitudeInput.value = Number(lng).toFixed(6);
+  updateCoordReadout();
+  if (!map || !centerMarker) return;
+  centerMarker.setLatLng([lat, lng]);
+  if (radiusCircle) radiusCircle.setLatLng([lat, lng]);
+  if (recenter) map.panTo([lat, lng], { animate: true });
 }
 
-function syncMapToInputs(options = {}) {
-  const latitude = Number(latitudeInput.value);
-  const longitude = Number(longitudeInput.value);
-  if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
-    return;
-  }
-
-  setCoordinates(latitude, longitude, options);
+function syncCenter({ recenter = false } = {}) {
+  const lat = Number(latitudeInput.value);
+  const lng = Number(longitudeInput.value);
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return;
+  setCenter(lat, lng, { recenter });
+  syncRadiusCircle();
 }
 
 function syncRadiusCircle() {
-  if (!map || !radiusCircle) {
-    return;
-  }
-
-  const radiusMiles = Number(radiusInput.value);
-  if (Number.isNaN(radiusMiles) || radiusMiles <= 0) {
-    return;
-  }
-
-  radiusCircle.setRadius(milesToMeters(radiusMiles));
+  if (!radiusCircle) return;
+  const miles = Number(radiusInput.value);
+  if (Number.isNaN(miles) || miles <= 0) return;
+  radiusCircle.setRadius(milesToMeters(miles));
 }
 
-function updateRadiusValue() {
-  const radiusMiles = Number(radiusInput.value);
-  if (Number.isNaN(radiusMiles) || radiusMiles <= 0) {
-    radiusValue.textContent = "-";
+function updateRadiusLabel() {
+  const miles = Number(radiusInput.value);
+  radiusValue.textContent = Number.isNaN(miles) || miles <= 0 ? "–" : `${miles} mi`;
+}
+
+function updateCoordReadout() {
+  const lat = Number(latitudeInput.value);
+  const lng = Number(longitudeInput.value);
+  if (Number.isNaN(lat) || Number.isNaN(lng)) {
+    coordReadout.textContent = "–";
     return;
   }
-
-  radiusValue.textContent = `${radiusMiles} mi`;
+  const lngText = lng < 0 ? `−${Math.abs(lng).toFixed(4)}` : lng.toFixed(4);
+  coordReadout.textContent = `${lat.toFixed(4)}, ${lngText}`;
 }
 
 function milesToMeters(miles) {
   return miles * 1609.344;
 }
 
+// ---------- Boot ----------
 window.addEventListener("DOMContentLoaded", () => {
   selectedCuisines = [...defaults.cuisines];
   excludedCuisines = [...defaults.excludedCuisines];
   selectedPriceLevels = [...defaults.priceLevels];
 
-  renderCuisinePicker();
-  renderExcludedCuisines();
-  renderPricePicker();
-  initializeExcludedCuisineDropzone();
-  updateRadiusValue();
-  initializeMap();
+  renderCuisinePickers();
+  renderPriceOptions();
+  updateRadiusLabel();
+  updateCoordReadout();
+  initMap();
   form.requestSubmit();
 });
