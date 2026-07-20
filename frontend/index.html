@@ -20,7 +20,7 @@
         </div>
         <div class="stat">
           <span class="stat-value" id="stat-radius">–</span>
-          <span class="stat-label">in radius</span>
+          <span class="stat-label" id="stat-radius-label">in radius</span>
         </div>
         <div class="stat">
           <span class="stat-value" id="stat-returned">–</span>
@@ -36,16 +36,35 @@
           <input id="longitude" name="longitude" type="hidden" value="-95.8245" />
 
           <section class="ctrl-group">
-            <h2 class="ctrl-title">Location</h2>
-            <div class="coord-readout">
-              <span class="coord-value" id="coord-readout">29.7858, −95.8245</span>
-              <span class="coord-hint">click map to move</span>
+            <h2 class="ctrl-title">Search area</h2>
+
+            <div class="seg" role="tablist">
+              <button type="button" class="seg-btn is-active" id="mode-radius">Radius</button>
+              <button type="button" class="seg-btn" id="mode-path">Path / commute</button>
             </div>
+
+            <div class="mode-radius-only">
+              <div class="coord-readout">
+                <span class="coord-value" id="coord-readout">29.7858, −95.8245</span>
+                <span class="coord-hint">click map to move</span>
+              </div>
+            </div>
+
+            <div class="mode-path-only" hidden>
+              <p class="hint-line">Click the map to drop stops along your route — drag a stop to adjust it.</p>
+              <div class="path-actions">
+                <button type="button" id="path-undo" class="btn-ghost btn-sm">Undo</button>
+                <button type="button" id="path-clear" class="btn-ghost btn-sm">Clear</button>
+                <span class="path-count" id="path-count">0 stops</span>
+              </div>
+            </div>
+
             <label class="field">
               <span class="field-label">City filter (optional)</span>
               <input id="city" name="city" type="text" value="" placeholder="e.g. Katy, TX" />
             </label>
-            <div class="field">
+
+            <div class="field mode-radius-only">
               <div class="field-head">
                 <span class="field-label" style="margin: 0">Radius</span>
                 <output id="radius-value" class="radius-out" for="radius">10 mi</output>
@@ -53,6 +72,16 @@
               <input id="radius" name="radius" type="range" min="1" max="100" step="1" value="10" />
               <div class="range-scale"><span>1 mi</span><span>100 mi</span></div>
             </div>
+
+            <div class="field mode-path-only" hidden>
+              <div class="field-head">
+                <span class="field-label" style="margin: 0">Corridor width (± from path)</span>
+                <output id="path-width-value" class="radius-out" for="path-width">1.0 mi</output>
+              </div>
+              <input id="path-width" name="pathWidth" type="range" min="0.25" max="5" step="0.25" value="1" />
+              <div class="range-scale"><span>0.25 mi</span><span>5 mi</span></div>
+            </div>
+
             <label class="field">
               <span class="field-label">Sort by</span>
               <select id="sort" name="sort">

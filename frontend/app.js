@@ -31,6 +31,15 @@ const rowTemplate = document.getElementById("result-row-template");
 const statShowing = document.getElementById("stat-showing");
 const statRadius = document.getElementById("stat-radius");
 const statReturned = document.getElementById("stat-returned");
+const statRadiusLabel = document.getElementById("stat-radius-label");
+
+const modeRadiusBtn = document.getElementById("mode-radius");
+const modePathBtn = document.getElementById("mode-path");
+const pathWidthInput = document.getElementById("path-width");
+const pathWidthValue = document.getElementById("path-width-value");
+const pathCount = document.getElementById("path-count");
+const pathUndoBtn = document.getElementById("path-undo");
+const pathClearBtn = document.getElementById("path-clear");
 
 // ---------- State ----------
 let map;
@@ -39,6 +48,13 @@ let radiusCircle;
 let resultLayer;
 const rowRefs = []; // { row, marker } per rendered result
 let activeIndex = -1;
+
+// Search-area mode: "radius" (center + circle) or "path" (route corridor)
+let mode = "radius";
+let pathPoints = []; // [{ lat, lng }] waypoints
+let pathLayer; // centerline polyline
+let corridorLayer; // wide band polyline
+let waypointLayer; // group of draggable vertex markers
 
 let selectedCuisines = [];
 let excludedCuisines = [];
@@ -96,27 +112,129 @@ function scoreTier(score) {
   return "";
 }
 
+// ---------- Geo (corridor math) ----------
+const DEG = Math.PI / 180;
+const MILES_PER_DEG_LAT = 69.0;
+
+function haversineMiles(a, b) {
+  const dLat = (b.lat - a.lat) * DEG;
+  const dLng = (b.lng - a.lng) * DEG;
+  const lat1 = a.lat * DEG;
+  const lat2 = b.lat * DEG;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 3958.7613 * 2 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Shortest distance (miles) from point p to segment a–b, via a local
+// equirectangular projection centred on p (accurate at corridor scale).
+function milesPointToSegment(p, a, b) {
+  const kx = MILES_PER_DEG_LAT * Math.cos(p.lat * DEG); // miles per deg lng near p
+  const ky = MILES_PER_DEG_LAT; // miles per deg lat
+  const ax = (a.lng - p.lng) * kx, ay = (a.lat - p.lat) * ky;
+  const bx = (b.lng - p.lng) * kx, by = (b.lat - p.lat) * ky;
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 ? -(ax * dx + ay * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.hypot(cx, cy);
+}
+
+// Distance (miles) from a point to the whole polyline.
+function milesPointToPath(p, points) {
+  if (!points.length) return Infinity;
+  if (points.length === 1) return haversineMiles(p, points[0]);
+  let best = Infinity;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    best = Math.min(best, milesPointToSegment(p, points[i], points[i + 1]));
+  }
+  return best;
+}
+
+function pathBboxCenter(points) {
+  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+  for (const point of points) {
+    minLat = Math.min(minLat, point.lat);
+    maxLat = Math.max(maxLat, point.lat);
+    minLng = Math.min(minLng, point.lng);
+    maxLng = Math.max(maxLng, point.lng);
+  }
+  return { lat: (minLat + maxLat) / 2, lng: (minLng + maxLng) / 2 };
+}
+
+// Radius (miles) whose bounding box covers the whole path plus the corridor.
+function pathCoverRadius(points, widthMiles) {
+  const center = pathBboxCenter(points);
+  let maxDist = 0;
+  for (const point of points) maxDist = Math.max(maxDist, haversineMiles(center, point));
+  return { center, radius: Math.min(100, maxDist + widthMiles + 0.5) };
+}
+
+function pathWidth() {
+  return Number(pathWidthInput.value);
+}
+
 // ---------- Request ----------
 function buildPayload() {
   const city = cityInput.value.trim();
-  return {
-    location: {
-      latitude: Number(latitudeInput.value),
-      longitude: Number(longitudeInput.value),
-    },
-    radius_miles: Number(radiusInput.value),
+  const base = {
     sort_method: sortSelect.value,
     city: city || null,
     cuisines: [...selectedCuisines],
     excluded_cuisines: [...excludedCuisines],
     price_levels: [...selectedPriceLevels],
     open_now: openNowInput.checked,
-    exact_radius_only: exactRadiusInput.checked,
     include_filter_options: false,
+  };
+
+  if (mode === "path") {
+    // Fetch every candidate across the route's bounding box, then filter to
+    // the corridor client-side (see corridorFilter).
+    const { center, radius } = pathCoverRadius(pathPoints, pathWidth());
+    return {
+      ...base,
+      location: { latitude: center.lat, longitude: center.lng },
+      radius_miles: radius,
+      exact_radius_only: false,
+      page_size: 200,
+    };
+  }
+
+  return {
+    ...base,
+    location: {
+      latitude: Number(latitudeInput.value),
+      longitude: Number(longitudeInput.value),
+    },
+    radius_miles: Number(radiusInput.value),
+    exact_radius_only: exactRadiusInput.checked,
   };
 }
 
+// Keep only results within the corridor width of the drawn path, annotate each
+// with its distance to the path, and order shortest-first when sorting by
+// Distance (otherwise preserve the server's score-based order).
+function corridorFilter(results) {
+  const width = pathWidth();
+  const kept = [];
+  for (const result of results) {
+    const lat = Number(result.business && result.business.lat);
+    const lng = Number(result.business && result.business.lng);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) continue;
+    const distance = milesPointToPath({ lat, lng }, pathPoints);
+    if (distance <= width) {
+      result._pathDistance = distance;
+      kept.push(result);
+    }
+  }
+  if (sortSelect.value === "Distance") {
+    kept.sort((a, b) => a._pathDistance - b._pathDistance);
+  }
+  return kept;
+}
+
 function searchLabel() {
+  if (mode === "path") return "your route";
   const city = cityInput.value.trim();
   if (city) return city;
   const lat = Number(latitudeInput.value);
@@ -127,11 +245,17 @@ function searchLabel() {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+
+  if (mode === "path" && pathPoints.length < 2) {
+    setStatus("Add at least 2 stops on the map to define a route.");
+    return;
+  }
+
   const payload = buildPayload();
   const label = searchLabel();
 
   setLoading(true);
-  setStatus(`Searching near ${label}…`);
+  setStatus(`Searching ${mode === "path" ? "along " : "near "}${label}…`);
   showSkeletons();
 
   try {
@@ -142,6 +266,13 @@ form.addEventListener("submit", async (event) => {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || "Request failed.");
+
+    if (mode === "path") {
+      const scanned = Array.isArray(data.results) ? data.results.length : 0;
+      data.results = corridorFilter(data.results || []);
+      data.exact_radius_count = data.results.length;
+      data.returned_count = scanned;
+    }
     renderResults(data, label);
   } catch (error) {
     renderError(error.message || "Unknown error.");
@@ -175,12 +306,17 @@ function renderResults(data, label) {
     return;
   }
 
-  setStatus(`${results.length} restaurants near ${label}. Click a row to locate it on the map.`);
+  const preposition = mode === "path" ? "along" : "near";
+  setStatus(`${results.length} restaurants ${preposition} ${label}. Click a row to locate it on the map.`);
 
   const bounds = [];
-  const centerLat = Number(latitudeInput.value);
-  const centerLng = Number(longitudeInput.value);
-  if (!Number.isNaN(centerLat) && !Number.isNaN(centerLng)) bounds.push([centerLat, centerLng]);
+  if (mode === "path") {
+    for (const point of pathPoints) bounds.push([point.lat, point.lng]);
+  } else {
+    const centerLat = Number(latitudeInput.value);
+    const centerLng = Number(longitudeInput.value);
+    if (!Number.isNaN(centerLat) && !Number.isNaN(centerLng)) bounds.push([centerLat, centerLng]);
+  }
 
   results.forEach((result, index) => {
     const rank = index + 1;
@@ -256,7 +392,7 @@ function buildMeta(result, business, rec) {
   const price = formatPrice(business);
   if (price) parts.push(tag(price));
 
-  const distance = formatDistance(result.distance_mi);
+  const distance = formatDistance(result._pathDistance ?? result.distance_mi);
   if (distance) parts.push(tag(distance));
 
   const recText = formatScore(rec);
@@ -617,17 +753,133 @@ function initMap() {
 
   resultLayer = L.layerGroup().addTo(map);
 
+  // Path-mode layers (created once, added/removed with the mode)
+  corridorLayer = L.polyline([], {
+    color: "#2fbfad",
+    opacity: 0.18,
+    lineCap: "round",
+    lineJoin: "round",
+    interactive: false,
+  });
+  pathLayer = L.polyline([], { color: "#2fbfad", weight: 2.5, opacity: 0.95, interactive: false });
+  waypointLayer = L.layerGroup();
+
   centerMarker.on("dragend", () => {
     const pos = centerMarker.getLatLng();
     setCenter(pos.lat, pos.lng, { recenter: false });
   });
-  map.on("click", (event) => setCenter(event.latlng.lat, event.latlng.lng, { recenter: false }));
+
+  map.on("click", (event) => {
+    if (mode === "path") {
+      addPathPoint(event.latlng.lat, event.latlng.lng);
+    } else {
+      setCenter(event.latlng.lat, event.latlng.lng, { recenter: false });
+    }
+  });
+
+  map.on("zoomend", updateCorridorWeight);
 
   radiusInput.addEventListener("input", () => {
     syncRadiusCircle();
     updateRadiusLabel();
   });
 }
+
+// ---------- Path drawing + corridor ----------
+function setMode(next) {
+  if (next === mode) return;
+  mode = next;
+  modeRadiusBtn.classList.toggle("is-active", mode === "radius");
+  modePathBtn.classList.toggle("is-active", mode === "path");
+  document.querySelectorAll(".mode-radius-only").forEach((el) => { el.hidden = mode !== "radius"; });
+  document.querySelectorAll(".mode-path-only").forEach((el) => { el.hidden = mode !== "path"; });
+  statRadiusLabel.textContent = mode === "path" ? "in corridor" : "in radius";
+
+  if (!map) return;
+  if (mode === "path") {
+    map.removeLayer(centerMarker);
+    map.removeLayer(radiusCircle);
+    corridorLayer.addTo(map);
+    pathLayer.addTo(map);
+    waypointLayer.addTo(map);
+    updateCorridorWeight();
+  } else {
+    map.removeLayer(corridorLayer);
+    map.removeLayer(pathLayer);
+    map.removeLayer(waypointLayer);
+    centerMarker.addTo(map);
+    radiusCircle.addTo(map);
+  }
+}
+
+function waypointIcon(index) {
+  return L.divIcon({
+    className: "waypoint",
+    html: `<span class="waypoint-dot">${index + 1}</span>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  });
+}
+
+function addPathPoint(lat, lng) {
+  pathPoints.push({ lat, lng });
+  redrawPath();
+}
+
+function redrawPath() {
+  const latlngs = pathPoints.map((p) => [p.lat, p.lng]);
+  pathLayer.setLatLngs(latlngs);
+  corridorLayer.setLatLngs(latlngs);
+  updateCorridorWeight();
+
+  waypointLayer.clearLayers();
+  pathPoints.forEach((point, index) => {
+    const marker = L.marker([point.lat, point.lng], {
+      icon: waypointIcon(index),
+      draggable: true,
+      zIndexOffset: 900,
+    });
+    marker.on("drag", (event) => {
+      const pos = event.target.getLatLng();
+      pathPoints[index] = { lat: pos.lat, lng: pos.lng };
+      pathLayer.setLatLngs(pathPoints.map((p) => [p.lat, p.lng]));
+      corridorLayer.setLatLngs(pathPoints.map((p) => [p.lat, p.lng]));
+    });
+    marker.on("dragend", redrawPath);
+    waypointLayer.addLayer(marker);
+  });
+
+  pathCount.textContent = `${pathPoints.length} ${pathPoints.length === 1 ? "stop" : "stops"}`;
+}
+
+// Render the corridor as a band whose on-screen width matches the real
+// corridor width (± pathWidth) at the current zoom.
+function updateCorridorWeight() {
+  if (!map || !corridorLayer || mode !== "path" || pathPoints.length < 1) return;
+  const lat = map.getCenter().lat;
+  const metersPerPixel = (156543.03392 * Math.cos(lat * DEG)) / 2 ** map.getZoom();
+  const fullWidthMeters = 2 * pathWidth() * 1609.344;
+  corridorLayer.setStyle({ weight: Math.max(3, fullWidthMeters / metersPerPixel) });
+}
+
+function clearPath() {
+  pathPoints = [];
+  redrawPath();
+}
+
+function undoPathPoint() {
+  pathPoints.pop();
+  redrawPath();
+}
+
+modeRadiusBtn.addEventListener("click", () => setMode("radius"));
+modePathBtn.addEventListener("click", () => setMode("path"));
+pathClearBtn.addEventListener("click", clearPath);
+pathUndoBtn.addEventListener("click", undoPathPoint);
+pathWidthInput.addEventListener("input", () => {
+  pathWidthValue.textContent = `${pathWidth().toFixed(2)} mi`;
+  updateCorridorWeight();
+});
 
 function setCenter(lat, lng, { recenter = true } = {}) {
   latitudeInput.value = Number(lat).toFixed(6);
@@ -684,6 +936,7 @@ window.addEventListener("DOMContentLoaded", () => {
   renderPriceOptions();
   updateRadiusLabel();
   updateCoordReadout();
+  pathWidthValue.textContent = `${pathWidth().toFixed(2)} mi`;
   initMap();
   form.requestSubmit();
 });
