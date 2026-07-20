@@ -76,6 +76,11 @@ class BeliClient:
         self._access_token: str | None = None
         self._access_token_expiry: datetime | None = None
         self._refresh_lock = asyncio.Lock()
+        # Cache resolved average scores for the process lifetime so overlapping
+        # searches don't re-hit the (heavily throttled) databusinessfloat endpoint.
+        self._avg_score_cache: dict[int, float | None] = {}
+        self._avg_pending: set[int] = set()
+        self._avg_warming = False
 
     @property
     def settings(self) -> Settings:
@@ -128,11 +133,63 @@ class BeliClient:
         return data
 
     async def average_business_score(self, business_id: int) -> float | None:
+        """Single fetch of one business's average score. Caches a genuine result
+        (number or "no score"); raises BeliAPIError on throttle so the caller can
+        decide how to back off. Retry/pacing is owned by warm_average_scores."""
+        if business_id in self._avg_score_cache:
+            return self._avg_score_cache[business_id]
+
         data = await self.data_business_float(business_id=business_id, field_name="AVGBUSINESSSCORE")
+        value = self._extract_avg_score(data)
+        self._avg_score_cache[business_id] = value
+        return value
+
+    def has_cached_average(self, business_id: int) -> bool:
+        return business_id in self._avg_score_cache
+
+    def cached_average_score(self, business_id: int) -> float | None:
+        return self._avg_score_cache.get(business_id)
+
+    async def warm_average_scores(
+        self,
+        business_ids: list[int],
+        pace_seconds: float = 0.5,
+        throttle_cooldown_seconds: float = 20.0,
+        max_attempts_per_id: int = 6,
+    ) -> None:
+        """Fill the average-score cache in the background at a throttle-safe,
+        serial pace. Beli's endpoint allows a short burst then blocks for a while,
+        so on a throttle we requeue the id and cool down long enough for the
+        bucket to refill. Only one warmer runs at a time; extra ids get queued."""
+        self._avg_pending.update(bid for bid in business_ids if bid not in self._avg_score_cache)
+        if self._avg_warming:
+            return
+
+        self._avg_warming = True
+        attempts: dict[int, int] = {}
+        try:
+            while self._avg_pending:
+                business_id = self._avg_pending.pop()
+                if business_id in self._avg_score_cache:
+                    continue
+                attempts[business_id] = attempts.get(business_id, 0) + 1
+                try:
+                    await self.average_business_score(business_id)
+                    await asyncio.sleep(pace_seconds)
+                except BeliAPIError as exc:
+                    if "(429)" in str(exc):
+                        if attempts[business_id] < max_attempts_per_id:
+                            self._avg_pending.add(business_id)  # retry after the cooldown
+                        await asyncio.sleep(throttle_cooldown_seconds)
+                    # a non-throttle error just drops this id
+        finally:
+            self._avg_warming = False
+
+    @staticmethod
+    def _extract_avg_score(data: dict[str, Any]) -> float | None:
         results = data.get("results")
         if not data.get("count") or not isinstance(results, list) or not results:
             return None
-
         value = results[0].get("value")
         if value is None:
             return None

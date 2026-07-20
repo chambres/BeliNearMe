@@ -23,7 +23,9 @@ from .models import (
 class RestaurantDiscoveryService:
     def __init__(self, client: BeliClient) -> None:
         self._client = client
-        self._average_score_concurrency = 8
+        # Only warm avg scores for the top-scored results per search, to bound
+        # how much of the throttled endpoint we touch.
+        self._average_score_limit = 60
 
     async def search_app(self, request: SearchRequest) -> SearchResponse:
         coords = f"{request.location.latitude},{request.location.longitude}"
@@ -250,16 +252,26 @@ class RestaurantDiscoveryService:
         if not results:
             return
 
-        semaphore = asyncio.Semaphore(self._average_score_concurrency)
+        # Fill instantly from cache; never block the response on the throttled
+        # avg-score endpoint. Uncached top-scored ids are warmed in the
+        # background at a safe pace and picked up by later searches / the
+        # frontend's score refresh.
+        for result in results:
+            if self._client.has_cached_average(result.business.id):
+                result.average_beli_score = self._client.cached_average_score(result.business.id)
 
-        async def enrich(result: RestaurantResult) -> None:
-            async with semaphore:
-                try:
-                    result.average_beli_score = await self._client.average_business_score(result.business.id)
-                except BeliAPIError:
-                    result.average_beli_score = None
-
-        await asyncio.gather(*(enrich(result) for result in results))
+        ranked = sorted(
+            results,
+            key=lambda item: item.recommendation_score if item.recommendation_score is not None else float("-inf"),
+            reverse=True,
+        )
+        uncached = [
+            result.business.id
+            for result in ranked[: self._average_score_limit]
+            if not self._client.has_cached_average(result.business.id)
+        ]
+        if uncached:
+            asyncio.create_task(self._client.warm_average_scores(uncached))
 
     def _apply_result_filters(
         self,
