@@ -254,8 +254,7 @@ class RestaurantDiscoveryService:
 
         # Fill instantly from cache; never block the response on the throttled
         # avg-score endpoint. Uncached top-scored ids are warmed in the
-        # background at a safe pace and picked up by later searches / the
-        # frontend's score refresh.
+        # background at a safe pace and picked up by later searches.
         for result in results:
             if self._client.has_cached_average(result.business.id):
                 result.average_beli_score = self._client.cached_average_score(result.business.id)

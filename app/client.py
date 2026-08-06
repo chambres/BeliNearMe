@@ -135,7 +135,8 @@ class BeliClient:
     async def average_business_score(self, business_id: int) -> float | None:
         """Single fetch of one business's average score. Caches a genuine result
         (number or "no score"); raises BeliAPIError on throttle so the caller can
-        decide how to back off. Retry/pacing is owned by warm_average_scores."""
+        decide how to back off. Pacing and backoff are owned by
+        warm_average_scores."""
         if business_id in self._avg_score_cache:
             return self._avg_score_cache[business_id]
 
@@ -154,34 +155,31 @@ class BeliClient:
         self,
         business_ids: list[int],
         pace_seconds: float = 0.5,
-        throttle_cooldown_seconds: float = 20.0,
-        max_attempts_per_id: int = 6,
     ) -> None:
-        """Fill the average-score cache in the background at a throttle-safe,
-        serial pace. Beli's endpoint allows a short burst then blocks for a while,
-        so on a throttle we requeue the id and cool down long enough for the
-        bucket to refill. Only one warmer runs at a time; extra ids get queued."""
+        """Fill the average-score cache in the background at a slow, serial pace.
+        Beli's endpoint allows a short burst and then blocks, so the first 429
+        ends the run and drops the rest of the queue: we never retry a throttled
+        id. Knocking repeatedly after being told to stop is what gets an account
+        flagged, and an unresolved score is only a missing number. Ids left
+        unwarmed stay uncached until some later search asks for them again."""
         self._avg_pending.update(bid for bid in business_ids if bid not in self._avg_score_cache)
         if self._avg_warming:
             return
 
         self._avg_warming = True
-        attempts: dict[int, int] = {}
         try:
             while self._avg_pending:
                 business_id = self._avg_pending.pop()
                 if business_id in self._avg_score_cache:
                     continue
-                attempts[business_id] = attempts.get(business_id, 0) + 1
                 try:
                     await self.average_business_score(business_id)
-                    await asyncio.sleep(pace_seconds)
                 except BeliAPIError as exc:
                     if "(429)" in str(exc):
-                        if attempts[business_id] < max_attempts_per_id:
-                            self._avg_pending.add(business_id)  # retry after the cooldown
-                        await asyncio.sleep(throttle_cooldown_seconds)
-                    # a non-throttle error just drops this id
+                        self._avg_pending.clear()  # throttled: stand down, don't retry
+                        break
+                    continue  # a non-throttle error just drops this id
+                await asyncio.sleep(pace_seconds)
         finally:
             self._avg_warming = False
 

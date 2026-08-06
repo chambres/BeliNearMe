@@ -10,10 +10,15 @@ class _FakeSettings:
     beli_user_id = "user-123"
 
 
+_AVG_SCORES = {228347: 8.1, 555555: 8.8}
+
+
 class _FakeClient:
-    def __init__(self) -> None:
+    def __init__(self, cached: dict[int, float] | None = None) -> None:
         self.settings = _FakeSettings()
         self.avg_score_requests: list[int] = []
+        self.warmed_ids: list[int] = []
+        self._avg_cache: dict[int, float | None] = dict(cached or {})
 
     async def user_rec_scores(self, payload):
         return {
@@ -53,16 +58,25 @@ class _FakeClient:
 
     async def average_business_score(self, business_id: int):
         self.avg_score_requests.append(business_id)
-        if business_id == 228347:
-            return 8.1
-        if business_id == 555555:
-            return 8.8
-        return None
+        value = _AVG_SCORES.get(business_id)
+        self._avg_cache[business_id] = value
+        return value
+
+    def has_cached_average(self, business_id: int) -> bool:
+        return business_id in self._avg_cache
+
+    def cached_average_score(self, business_id: int):
+        return self._avg_cache.get(business_id)
+
+    async def warm_average_scores(self, business_ids, pace_seconds: float = 0.0) -> None:
+        self.warmed_ids.extend(business_ids)
+        for business_id in business_ids:
+            await self.average_business_score(business_id)
 
 
 class RestaurantDiscoveryServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_nearby_recommendations_exposes_average_and_recommendation_scores(self):
-        client = _FakeClient()
+        client = _FakeClient(cached=_AVG_SCORES)
         service = RestaurantDiscoveryService(client)
 
         request = RecommendationQueryRequest(
@@ -75,7 +89,10 @@ class RestaurantDiscoveryServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.returned_count, 2)
         self.assertEqual(len(response.results), 2)
-        self.assertCountEqual(client.avg_score_requests, [228347, 555555])
+        # Cached scores are served without touching the throttled endpoint, and
+        # nothing gets queued for background warming.
+        self.assertEqual(client.avg_score_requests, [])
+        self.assertEqual(client.warmed_ids, [])
 
         result = response.results[0]
         self.assertEqual(result.business.name, "Aga's Restaurant & Catering")
@@ -87,7 +104,7 @@ class RestaurantDiscoveryServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.within_radius)
 
     async def test_score_sort_orders_by_average_beli_score_desc(self):
-        client = _FakeClient()
+        client = _FakeClient(cached=_AVG_SCORES)
         service = RestaurantDiscoveryService(client)
 
         request = RecommendationQueryRequest(
@@ -105,7 +122,7 @@ class RestaurantDiscoveryServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_filters_can_exclude_cuisines_and_limit_price_levels(self):
-        client = _FakeClient()
+        client = _FakeClient(cached=_AVG_SCORES)
         service = RestaurantDiscoveryService(client)
 
         request = RecommendationQueryRequest(

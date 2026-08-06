@@ -46,13 +46,8 @@ let map;
 let centerMarker;
 let radiusCircle;
 let resultLayer;
-const rowRefs = []; // { row, marker, businessId, scoreEl, hasAvg } per result
+const rowRefs = []; // { row, marker, businessId, scoreEl } per result
 let activeIndex = -1;
-
-// Beli-avg scores stream in from the backend's background warmer; poll for them.
-let lastPayload = null;
-let scorePoller = null;
-let scoreAttempts = 0;
 
 // Search-area mode: "radius" (center + circle) or "path" (route corridor)
 let mode = "radius";
@@ -258,8 +253,6 @@ form.addEventListener("submit", async (event) => {
 
   const payload = buildPayload();
   const label = searchLabel();
-  lastPayload = payload;
-  stopScorePolling();
 
   setLoading(true);
   setStatus(`Searching ${mode === "path" ? "along " : "near "}${label}…`);
@@ -383,7 +376,7 @@ function renderResults(data, label) {
     }
 
     row.addEventListener("click", () => focusResult(index, { fromMap: false }));
-    rowRefs.push({ row, marker, businessId: business.id, scoreEl: rowScoreEl, hasAvg: Boolean(avgText) });
+    rowRefs.push({ row, marker, businessId: business.id, scoreEl: rowScoreEl });
     resultsList.appendChild(fragment);
   });
 
@@ -391,64 +384,6 @@ function renderResults(data, label) {
     map.fitBounds(bounds, { padding: [36, 36], maxZoom: 14 });
   }
 
-  maybeStartScorePolling();
-}
-
-// ---------- Beli-avg score streaming ----------
-function maybeStartScorePolling() {
-  if (!lastPayload) return;
-  if (!rowRefs.some((ref) => !ref.hasAvg)) return;
-  scoreAttempts = 0;
-  updateScoreNote();
-  scorePoller = window.setInterval(pollScores, 4000);
-}
-
-function stopScorePolling() {
-  if (scorePoller) {
-    window.clearInterval(scorePoller);
-    scorePoller = null;
-  }
-}
-
-function updateScoreNote() {
-  const missing = rowRefs.filter((ref) => !ref.hasAvg).length;
-  const sortName = sortSelect.options[sortSelect.selectedIndex].text;
-  resultsNote.textContent = missing
-    ? `sorted by ${sortName} · loading ${missing} score${missing === 1 ? "" : "s"}…`
-    : `sorted by ${sortName}`;
-}
-
-async function pollScores() {
-  scoreAttempts += 1;
-  try {
-    const response = await fetch("/v1/recommendations/nearby", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(lastPayload),
-    });
-    if (!response.ok) return;
-    const data = await response.json();
-    const byId = new Map();
-    for (const result of data.results || []) {
-      if (result.business) byId.set(result.business.id, result.average_beli_score);
-    }
-    for (const ref of rowRefs) {
-      if (ref.hasAvg) continue;
-      const avg = byId.get(ref.businessId);
-      if (avg === undefined || avg === null) continue;
-      ref.scoreEl.textContent = Number(avg).toFixed(1);
-      ref.scoreEl.classList.remove("dim");
-      ref.hasAvg = true;
-      const tier = scoreTier(avg);
-      ref.row.classList.remove("tier-a", "tier-b");
-      if (tier) ref.row.classList.add(tier);
-    }
-  } catch (error) {
-    /* transient — keep polling */
-  } finally {
-    updateScoreNote();
-    if (!rowRefs.some((ref) => !ref.hasAvg) || scoreAttempts >= 12) stopScorePolling();
-  }
 }
 
 function buildMeta(result, business, rec) {
