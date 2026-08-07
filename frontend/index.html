@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BeliNearMe</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -28,13 +34,6 @@
               <button type="button" class="seg-btn" id="mode-path">Path / commute</button>
             </div>
 
-            <div class="mode-radius-only">
-              <div class="coord-readout">
-                <span class="coord-value" id="coord-readout">29.7858, −95.8245</span>
-                <span class="coord-hint">click map to move</span>
-              </div>
-            </div>
-
             <div class="mode-path-only" hidden>
               <p class="hint-line">Click the map to drop stops along your route — drag a stop to adjust it.</p>
               <div class="path-actions">
@@ -43,11 +42,6 @@
                 <span class="path-count" id="path-count">0 stops</span>
               </div>
             </div>
-
-            <label class="field">
-              <span class="field-label">City filter (optional)</span>
-              <input id="city" name="city" type="text" value="" placeholder="e.g. Katy, TX" />
-            </label>
 
             <div class="field mode-radius-only">
               <div class="field-head">

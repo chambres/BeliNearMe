@@ -4,13 +4,11 @@
 const form = document.getElementById("query-form");
 const latitudeInput = document.getElementById("latitude");
 const longitudeInput = document.getElementById("longitude");
-const cityInput = document.getElementById("city");
 const radiusInput = document.getElementById("radius");
 const radiusValue = document.getElementById("radius-value");
 const sortSelect = document.getElementById("sort");
 const openNowInput = document.getElementById("open-now");
 const exactRadiusInput = document.getElementById("exact-radius");
-const coordReadout = document.getElementById("coord-readout");
 
 const priceOptions = document.getElementById("price-options");
 const cuisineOptions = document.getElementById("cuisine-options");
@@ -68,7 +66,6 @@ const defaults = {
   latitude: 29.7858,
   longitude: -95.8245,
   radius: 10,
-  city: "",
   sort: "Score",
   cuisines: [],
   excludedCuisines: [],
@@ -172,10 +169,9 @@ function pathWidth() {
 
 // ---------- Request ----------
 function buildPayload() {
-  const city = cityInput.value.trim();
   const base = {
     sort_method: sortSelect.value,
-    city: city || null,
+    city: null,
     cuisines: [...selectedCuisines],
     excluded_cuisines: [...excludedCuisines],
     price_levels: [...selectedPriceLevels],
@@ -230,13 +226,7 @@ function corridorFilter(results) {
 }
 
 function searchLabel() {
-  if (mode === "path") return "your route";
-  const city = cityInput.value.trim();
-  if (city) return city;
-  const lat = Number(latitudeInput.value);
-  const lng = Number(longitudeInput.value);
-  if (!Number.isNaN(lat) && !Number.isNaN(lng)) return `${lat.toFixed(3)}, ${lng.toFixed(3)}`;
-  return "the selected area";
+  return mode === "path" ? "your route" : "the map center";
 }
 
 form.addEventListener("submit", async (event) => {
@@ -496,9 +486,9 @@ function numberedIcon(rank, tier) {
   return L.divIcon({
     className: "pin",
     html: `<span class="pin-dot ${tier}">${rank}</span>`,
-    iconSize: [22, 22],
-    iconAnchor: [11, 11],
-    popupAnchor: [0, -12],
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -15],
   });
 }
 
@@ -696,7 +686,6 @@ resetButton.addEventListener("click", () => {
   latitudeInput.value = defaults.latitude;
   longitudeInput.value = defaults.longitude;
   radiusInput.value = defaults.radius;
-  cityInput.value = defaults.city;
   sortSelect.value = defaults.sort;
   openNowInput.checked = defaults.openNow;
   exactRadiusInput.checked = defaults.exactRadius;
@@ -709,7 +698,6 @@ resetButton.addEventListener("click", () => {
   renderCuisinePickers();
   renderPriceOptions();
   updateRadiusLabel();
-  updateCoordReadout();
   syncCenter({ recenter: true });
 });
 
@@ -724,18 +712,20 @@ function initMap() {
   const lng = Number(longitudeInput.value);
 
   map = L.map("map-picker", { zoomControl: true, scrollWheelZoom: true }).setView([lat, lng], 11);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
     maxZoom: 20,
     subdomains: "abcd",
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
   }).addTo(map);
 
+  const accent = token("--color-accent");
+
   radiusCircle = L.circle([lat, lng], {
     radius: milesToMeters(Number(radiusInput.value)),
-    color: "#2fbfad",
+    color: accent,
     weight: 1.5,
     opacity: 0.9,
-    fillColor: "#2fbfad",
+    fillColor: accent,
     fillOpacity: 0.08,
   }).addTo(map);
 
@@ -746,13 +736,13 @@ function initMap() {
 
   // Path-mode layers (created once, added/removed with the mode)
   corridorLayer = L.polyline([], {
-    color: "#2fbfad",
+    color: accent,
     opacity: 0.18,
     lineCap: "round",
     lineJoin: "round",
     interactive: false,
   });
-  pathLayer = L.polyline([], { color: "#2fbfad", weight: 2.5, opacity: 0.95, interactive: false });
+  pathLayer = L.polyline([], { color: accent, weight: 2.5, opacity: 0.95, interactive: false });
   waypointLayer = L.layerGroup();
 
   centerMarker.on("dragend", () => {
@@ -806,8 +796,8 @@ function waypointIcon(index) {
   return L.divIcon({
     className: "waypoint",
     html: `<span class="waypoint-dot">${index + 1}</span>`,
-    iconSize: [18, 18],
-    iconAnchor: [9, 9],
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
   });
 }
 
@@ -874,7 +864,6 @@ pathWidthInput.addEventListener("input", () => {
 function setCenter(lat, lng, { recenter = true } = {}) {
   latitudeInput.value = Number(lat).toFixed(6);
   longitudeInput.value = Number(lng).toFixed(6);
-  updateCoordReadout();
   if (!map || !centerMarker) return;
   centerMarker.setLatLng([lat, lng]);
   if (radiusCircle) radiusCircle.setLatLng([lat, lng]);
@@ -901,15 +890,10 @@ function updateRadiusLabel() {
   radiusValue.textContent = Number.isNaN(miles) || miles <= 0 ? "–" : `${miles} mi`;
 }
 
-function updateCoordReadout() {
-  const lat = Number(latitudeInput.value);
-  const lng = Number(longitudeInput.value);
-  if (Number.isNaN(lat) || Number.isNaN(lng)) {
-    coordReadout.textContent = "–";
-    return;
-  }
-  const lngText = lng < 0 ? `−${Math.abs(lng).toFixed(4)}` : lng.toFixed(4);
-  coordReadout.textContent = `${lat.toFixed(4)}, ${lngText}`;
+/* Leaflet needs a concrete colour string, so read it from the design token
+   rather than hardcoding a hex that would drift from tokens.css. */
+function token(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 function milesToMeters(miles) {
@@ -925,7 +909,6 @@ window.addEventListener("DOMContentLoaded", () => {
   renderCuisinePickers();
   renderPriceOptions();
   updateRadiusLabel();
-  updateCoordReadout();
   pathWidthValue.textContent = `${pathWidth().toFixed(2)} mi`;
   initMap();
   form.requestSubmit();

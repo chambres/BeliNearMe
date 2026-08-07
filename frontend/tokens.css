@@ -1,0 +1,67 @@
+/* Hallmark · tokens · theme: Almanac (editorial)
+ * axes — paper band: light (96.5%) · display style: roman-serif · accent hue: warm (32°)
+ * Every colour and font in styles.css references a token from this file by name.
+ */
+:root {
+  color-scheme: light;
+
+  /* ---------- Paper & ink ----------
+     Warm oat anchor (hue ~82). Neutrals carry the anchor's chroma so the
+     greys lean warm with the accent rather than fighting it. */
+  --color-paper: oklch(96.5% 0.012 85);
+  --color-paper-2: oklch(94% 0.014 85);
+  --color-paper-3: oklch(91% 0.016 82);
+  --color-rule: oklch(85% 0.013 82);
+  --color-rule-strong: oklch(68% 0.015 78);
+  --color-ink: oklch(24% 0.014 62);
+  --color-ink-2: oklch(37% 0.013 68);
+  --color-muted: oklch(46% 0.012 72);
+  --color-muted-2: oklch(55% 0.011 74);
+
+  /* ---------- Accent — printer's vermilion ----------
+     One hue, used as a highlighter: focus rings, active state, the primary
+     action, the masthead rule. Never a large fill. */
+  --color-accent: oklch(52% 0.17 32);
+  --color-accent-ink: oklch(43% 0.16 32);
+  --color-accent-soft: oklch(93% 0.04 45);
+  --color-on-accent: oklch(97% 0.01 70);
+  --color-focus: oklch(52% 0.17 32);
+  --color-danger: oklch(45% 0.15 27);
+  --color-danger-soft: oklch(93% 0.035 30);
+
+  /* ---------- Type ---------- */
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-outlier: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* 1.25 major third, from a 16px base */
+  --text-xs: 0.64rem;
+  --text-sm: 0.8rem;
+  --text-base: 1rem;
+  --text-md: 1.25rem;
+  --text-lg: 1.5625rem;
+  --text-xl: 1.9531rem;
+  --text-2xl: 2.4414rem;
+
+  /* ---------- Space — 4pt scale ---------- */
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2rem;
+  --space-xl: 3rem;
+  --space-2xl: 4.5rem;
+
+  /* ---------- Rules & radius ----------
+     An almanac is set with hairlines, not cards. Radius stays near zero. */
+  --rule-hair: 1px;
+  --radius-sm: 2px;
+  --radius-input: 0px;
+
+  /* ---------- Motion — quiet ---------- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-short: 160ms;
+  --dur-mid: 220ms;
+}
