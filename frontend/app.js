@@ -28,10 +28,6 @@ const resultsNote = document.getElementById("results-note");
 const resultsList = document.getElementById("results-list");
 const rowTemplate = document.getElementById("result-row-template");
 
-const statShowing = document.getElementById("stat-showing");
-const statRadius = document.getElementById("stat-radius");
-const statReturned = document.getElementById("stat-returned");
-const statRadiusLabel = document.getElementById("stat-radius-label");
 
 const modeRadiusBtn = document.getElementById("mode-radius");
 const modePathBtn = document.getElementById("mode-path");
@@ -285,10 +281,6 @@ form.addEventListener("submit", async (event) => {
 function renderResults(data, label) {
   const results = Array.isArray(data.results) ? data.results : [];
 
-  statShowing.textContent = String(results.length);
-  statRadius.textContent = String(data.exact_radius_count ?? 0);
-  statReturned.textContent = String(data.returned_count ?? 0);
-
   clearResultMarkers();
   resultsList.replaceChildren();
   rowRefs.length = 0;
@@ -527,9 +519,6 @@ function renderError(message) {
   clearResultMarkers();
   resultsList.replaceChildren();
   rowRefs.length = 0;
-  statShowing.textContent = "0";
-  statRadius.textContent = "0";
-  statReturned.textContent = "0";
   resultsNote.textContent = "";
   statusBanner.classList.add("is-error");
   statusBanner.textContent = message;
@@ -795,7 +784,6 @@ function setMode(next) {
   modePathBtn.classList.toggle("is-active", mode === "path");
   document.querySelectorAll(".mode-radius-only").forEach((el) => { el.hidden = mode !== "radius"; });
   document.querySelectorAll(".mode-path-only").forEach((el) => { el.hidden = mode !== "path"; });
-  statRadiusLabel.textContent = mode === "path" ? "in corridor" : "in radius";
 
   if (!map) return;
   if (mode === "path") {
