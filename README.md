@@ -1,5 +1,11 @@
 # Beli Metadata API
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="BeliNearMe — top restaurants in a 10 mi radius of downtown Houston" width="800">
+  <br>
+  <em>Top restaurants in a 10 mi radius of downtown Houston</em>
+</p>
+
 `beli_metadata_api` is a Python FastAPI service that wraps the Beli endpoints we reverse engineered during analysis and turns them into a cleaner local API for:
 
 - nearby restaurant discovery
