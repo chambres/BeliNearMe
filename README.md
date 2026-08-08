@@ -1,4 +1,4 @@
-# Beli Metadata API
+# BeliNearMe
 
 <p align="center">
   <img src="docs/screenshot.png" alt="BeliNearMe — top restaurants in a 10 mi radius of downtown Houston" width="800">
